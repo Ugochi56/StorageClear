@@ -1243,7 +1243,7 @@ class TUIApp:
                     self.is_analyzing = False
                     
                     self.state = "dashboard"
-                    self.current_tab = 0
+                    self.current_tab = 5 if (getattr(self, 'run_diagnostics_opt', False) and not self.selected_drives) else 0
                     self.active_index = 0
                     self.scroll_top = 0
                     clear_screen()
@@ -1343,7 +1343,7 @@ class TUIApp:
             
         elif key == b'\r': # Enter key
             if self.state == "drive_selector":
-                if self.selected_drives:
+                if self.selected_drives or getattr(self, 'run_diagnostics_opt', False):
                     self.run_scan()
             elif self.state == "dashboard":
                 if self.current_tab == 0:
@@ -1366,13 +1366,16 @@ class TUIApp:
                 if self.active_index < len(self.drives):
                     drive = self.drives[self.active_index]['drive']
                     if drive in self.selected_drives:
-                        # Keep at least one drive selected
-                        if len(self.selected_drives) > 1:
+                        # Allow deselection of the last drive only if diagnostics toggle is enabled
+                        if getattr(self, 'run_diagnostics_opt', False) or len(self.selected_drives) > 1:
                             self.selected_drives.remove(drive)
                     else:
                         self.selected_drives.add(drive)
                 else:
                     self.run_diagnostics_opt = not self.run_diagnostics_opt
+                    # Auto-select first drive as a safety fallback if they disable diagnostics with empty drives
+                    if not self.run_diagnostics_opt and not self.selected_drives and self.drives:
+                        self.selected_drives.add(self.drives[0]['drive'])
             elif self.state == "dashboard":
                 self.toggle_active_item_selection()
             return False
