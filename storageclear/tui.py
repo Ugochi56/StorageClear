@@ -924,10 +924,28 @@ class TUIApp:
         
         # 4. Storage Space Capacity Limits
         storage_warnings = []
+        sys_drive_letter = os.environ.get('SystemDrive', 'C:').lower()
+        if not sys_drive_letter.endswith('\\'):
+            sys_drive_letter += '\\'
+            
+        checked_drives = set()
         for root_node in self.tree_roots:
             # Check capacity in bytes
             for drive in self.drives:
-                if drive['drive'].lower() == root_node.path.lower() or root_node.path.lower().startswith(drive['drive'].lower()):
+                d_lower = drive['drive'].lower()
+                if d_lower == root_node.path.lower() or root_node.path.lower().startswith(d_lower):
+                    if d_lower not in checked_drives:
+                        checked_drives.add(d_lower)
+                        used = drive['used']
+                        total = drive['total']
+                        pct = (used / total * 100) if total > 0 else 0
+                        if pct > 85:
+                            storage_warnings.append(f"{drive['drive']} ({pct:.1f}% full)")
+                            
+        # Always evaluate the system drive capacity as a whole!
+        if sys_drive_letter not in checked_drives:
+            for drive in self.drives:
+                if drive['drive'].lower() == sys_drive_letter:
                     used = drive['used']
                     total = drive['total']
                     pct = (used / total * 100) if total > 0 else 0
@@ -1155,6 +1173,13 @@ class TUIApp:
         
         # Build clean scan list
         scan_paths = list(self.selected_drives)
+        if getattr(self, 'run_diagnostics_opt', False):
+            sys_drive = os.environ.get('SystemDrive', 'C:')
+            if not sys_drive.endswith('\\'):
+                sys_drive += '\\'
+            if sys_drive not in scan_paths:
+                scan_paths.append(sys_drive)
+                
         scan_gen = scan_directory(scan_paths)
         
         while True:
@@ -1373,8 +1398,14 @@ class TUIApp:
                         self.selected_drives.add(drive)
                 else:
                     self.run_diagnostics_opt = not self.run_diagnostics_opt
+                    # Auto-select the system drive as the target path when checked!
+                    if self.run_diagnostics_opt:
+                        sys_drive = os.environ.get('SystemDrive', 'C:')
+                        if not sys_drive.endswith('\\'):
+                            sys_drive += '\\'
+                        self.selected_drives.add(sys_drive)
                     # Auto-select first drive as a safety fallback if they disable diagnostics with empty drives
-                    if not self.run_diagnostics_opt and not self.selected_drives and self.drives:
+                    elif not self.selected_drives and self.drives:
                         self.selected_drives.add(self.drives[0]['drive'])
             elif self.state == "dashboard":
                 self.toggle_active_item_selection()
