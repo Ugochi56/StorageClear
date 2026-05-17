@@ -6,7 +6,7 @@ import ctypes
 from ctypes import wintypes
 import shutil
 
-from storageclear.ops import get_logical_drives, send_to_recycle_bin, delete_permanently, get_ghost_applications, delete_registry_key_recursive, is_user_admin
+from storageclear.ops import get_logical_drives, send_to_recycle_bin, delete_permanently, get_ghost_applications, delete_registry_key_recursive, is_user_admin, get_startup_applications, get_memory_status
 from storageclear.scanner import scan_directory, DirNode
 from storageclear.recommender import get_large_files, find_duplicate_files, find_junk_and_cache
 
@@ -142,6 +142,10 @@ class TUIApp:
         # Selected items to delete
         self.selected_to_delete = [] # list of dicts: {'type': 'file'/'folder', 'path': str, 'size': int}
         
+        # PC Performance Diagnostics Feature
+        self.run_diagnostics_opt = False
+        self.perf_diagnostics = []
+        
     def run(self):
         """Main TUI Loop."""
         if sys.platform == 'win32':
@@ -259,6 +263,20 @@ class TUIApp:
             else:
                 lines.append(line_str + "\n")
                 
+        # Draw dynamic diagnostics option row below drives table
+        opt_idx = len(self.drives)
+        is_opt_active = (self.active_index == opt_idx)
+        opt_check = "[x]" if self.run_diagnostics_opt else "[ ]"
+        opt_check_color = COLOR_SUCCESS if self.run_diagnostics_opt else COLOR_GRAY
+        
+        opt_line = f"  {opt_check_color}{opt_check}{RESET} {BOLD}Diagnose PC Performance & Boot Bottlenecks (Safely Check RAM, Startup, Drives & Caches){RESET}"
+        
+        lines.append("\n") # Spacer
+        if is_opt_active:
+            lines.append(BG_HIGHLIGHT + opt_line + " " * max(1, cols - len(opt_line) + 21) + RESET + "\n")
+        else:
+            lines.append(opt_line + "\n")
+
         # Fill empty rows
         for _ in range(rows - len(lines) - 2):
             lines.append("\n")
@@ -354,6 +372,8 @@ class TUIApp:
         
         # Tab Header Labels
         tab_names = ["1. Disk Tree Explorer", "2. Duplicate Finder", "3. Large Files (>10MB)", "4. Junk & Cache Finder", "5. Ghost App Cleaner"]
+        if getattr(self, 'run_diagnostics_opt', False):
+            tab_names.append("6. Performance Boost")
         tab_line = " "
         for i, name in enumerate(tab_names):
             is_active_tab = (i == self.current_tab)
@@ -689,6 +709,40 @@ class TUIApp:
             
             return f"{display_text}{' ' * spaces}{root_display}"
             
+        elif self.current_tab == 5: # 6. PC Performance Boost
+            diag = item['diag']
+            status = diag['status']
+            
+            # Status colors & icons
+            if status == "HEALTHY":
+                status_str = f"{COLOR_SUCCESS}✔ HEALTHY{RESET}"
+            elif status == "WARNING":
+                status_str = f"{COLOR_DANGER}✖ WARNING{RESET}"
+            else: # NOTICE
+                status_str = f"{COLOR_WARNING}⚠ NOTICE{RESET}"
+                
+            if item['type'] == 'perf_header':
+                title = f"  📁 Category: {BOLD}{COLOR_PRIMARY}{diag['category']}{RESET}"
+                raw_len = 15 + len(diag['category'])
+                spaces = max(2, cols - raw_len - 15)
+                return f"{title}{' ' * spaces}{status_str}"
+                
+            elif item['type'] == 'perf_details':
+                details_text = f"    {COLOR_GRAY}ℹ Details: {diag['details']}{RESET}"
+                if len(details_text) > cols - 2:
+                    details_text = details_text[:cols - 5] + "..."
+                return details_text
+                
+            elif item['type'] == 'perf_recommend':
+                tip_text = f"    {COLOR_CYAN}💡 Speed-up Tip: {diag['recommendation']}{RESET}"
+                # Safely wrap or truncate
+                if len(tip_text) > cols - 2:
+                    tip_text = tip_text[:cols - 5] + "..."
+                return tip_text
+                
+            elif item['type'] == 'perf_spacer':
+                return f"  {COLOR_DARK_GRAY}{'─' * (cols - 4)}{RESET}"
+            
         return ""
 
     # --- LOGICAL CORE CALCULATIONS ---
@@ -791,6 +845,133 @@ class TUIApp:
                 self.reclaim_registry += 1
             else:
                 self.reclaim_files += 1
+
+    def diagnose_performance(self):
+        """Runs read-only Win32 performance checkups to isolate background and disk lag bottlenecks safely."""
+        self.perf_diagnostics = []
+        
+        # 1. RAM Utilization Diagnostic
+        mem = get_memory_status()
+        ram_load = mem['ram_load']
+        total_ram_gb = mem['total_phys'] / (1024**3)
+        avail_ram_gb = mem['avail_phys'] / (1024**3)
+        
+        ram_status = "HEALTHY"
+        ram_details = f"RAM Load: {ram_load}% | Free: {avail_ram_gb:.2f} GB of {total_ram_gb:.2f} GB total"
+        ram_recommend = "No action required. Your physical RAM has ample head-room for running intensive tasks."
+        
+        if ram_load > 85:
+            ram_status = "WARNING"
+            ram_recommend = "High RAM load can cause severe page swapping lag. Close active background applications (e.g. Chrome tabs, gaming launchers, IDEs) using Task Manager."
+        elif ram_load > 70:
+            ram_status = "NOTICE"
+            ram_recommend = "Moderate background memory footprint. Consider keeping unused background programs closed to maintain quick game/app loading times."
+            
+        self.perf_diagnostics.append({
+            'category': 'Physical RAM Load',
+            'status': ram_status,
+            'details': ram_details,
+            'recommendation': ram_recommend
+        })
+        
+        # 2. Windows Virtual Memory Swap Space
+        total_page_gb = mem['total_page'] / (1024**3)
+        avail_page_gb = mem['avail_page'] / (1024**3)
+        if total_page_gb > 0:
+            page_load = (1.0 - avail_page_gb / total_page_gb) * 100
+            page_status = "HEALTHY"
+            page_details = f"Virtual Memory Load: {page_load:.1f}% | Free Swap: {avail_page_gb:.2f} GB of {total_page_gb:.2f} GB"
+            page_recommend = "Windows virtual swap file allocation is optimally managing memory overflow."
+            
+            if page_load > 85:
+                page_status = "WARNING"
+                page_recommend = "Your virtual pagefile is near exhaustion! If physical RAM fills up, Windows will freeze or crash. Open Advanced System Settings and set Virtual Memory to 'Automatically manage paging file size'."
+                
+            self.perf_diagnostics.append({
+                'category': 'Virtual Swap Space',
+                'status': page_status,
+                'details': page_details,
+                'recommendation': page_recommend
+            })
+            
+        # 3. High-Impact Startup Apps
+        startup_apps = get_startup_applications()
+        startup_count = len(startup_apps)
+        
+        start_status = "HEALTHY"
+        start_details = f"{startup_count} apps configured to launch automatically on Windows boot."
+        start_recommend = "Excellent! Your startup load is minimal, keeping boot latency short and background memory lean."
+        
+        if startup_count > 10:
+            start_status = "WARNING"
+            start_recommend = f"Too many startup applications ({startup_count}) are configured to run automatically. This severely degrades boot speed and wastes CPU/RAM. Press [Ctrl + Shift + Esc], switch to 'Startup Apps', and disable non-essential programs."
+        elif startup_count > 5:
+            start_status = "NOTICE"
+            start_recommend = f"Moderate startup impact ({startup_count} apps). You can shave seconds off your boot times by disabling non-essential apps in Task Manager."
+            
+        if startup_apps:
+            app_list = ", ".join(app['name'] for app in startup_apps[:6])
+            if len(startup_apps) > 6:
+                app_list += f" (+ {len(startup_apps) - 6} more)"
+            start_details += f" Detected: {app_list}"
+            
+        self.perf_diagnostics.append({
+            'category': 'Boot Startup Apps',
+            'status': start_status,
+            'details': start_details,
+            'recommendation': start_recommend
+        })
+        
+        # 4. Storage Space Capacity Limits
+        storage_warnings = []
+        for root_node in self.tree_roots:
+            # Check capacity in bytes
+            for drive in self.drives:
+                if drive['drive'].lower() == root_node.path.lower() or root_node.path.lower().startswith(drive['drive'].lower()):
+                    used = drive['used']
+                    total = drive['total']
+                    pct = (used / total * 100) if total > 0 else 0
+                    if pct > 85:
+                        storage_warnings.append(f"{drive['drive']} ({pct:.1f}% full)")
+                        
+        store_status = "HEALTHY"
+        store_details = "All scanned storage partitions have healthy headroom."
+        store_recommend = "Your drives have plenty of block space, ensuring optimal SSD garbage collection and write speeds."
+        
+        if storage_warnings:
+            store_status = "WARNING"
+            store_details = f"High capacity warning on: {', '.join(storage_warnings)}."
+            store_recommend = "Solid State Drives (SSDs) lose substantial read/write speed when filled past 85% capacity. Clear out large files or delete detected duplicate groups using StorageClear to restore speed."
+            
+        self.perf_diagnostics.append({
+            'category': 'Storage Capacities',
+            'status': store_status,
+            'details': store_details,
+            'recommendation': store_recommend
+        })
+        
+        # 5. Developer Caches & Temp Junk Footprint
+        reclaim_junk_size = 0
+        for cat in self.junk_categories.values():
+            reclaim_junk_size += cat['size']
+            
+        junk_status = "HEALTHY"
+        junk_details = f"Obsolete caches & logs accumulate to only {format_size(reclaim_junk_size)}."
+        junk_recommend = "Excellent cache hygiene. Your drive has no major compiled target bloat."
+        
+        if reclaim_junk_size > 5 * 1024**3: # 5GB
+            junk_status = "WARNING"
+            junk_recommend = "Massive compilation target/cache bloat! Deleting these obsolete items in Tab 4 will free up significant gigabytes and speed up drive search/index indexing."
+        elif reclaim_junk_size > 1 * 1024**3: # 1GB
+            junk_status = "NOTICE"
+            junk_recommend = "Consider clearing out these cache targets (Tab 4) to free up storage space and keep your search index highly responsive."
+            
+        self.perf_diagnostics.append({
+            'category': 'Junk & Cache Bloat',
+            'status': junk_status,
+            'details': junk_details,
+            'recommendation': junk_recommend
+        })
 
     def is_path_selected(self, path):
         """Helper to determine if a specific path is selected on the system."""
@@ -944,6 +1125,25 @@ class TUIApp:
                     'type': 'ghost_app',
                     'app': app
                 })
+                
+        elif self.current_tab == 5: # 6. PC Performance Boost
+            for item in self.perf_diagnostics:
+                self.visible_items.append({
+                    'type': 'perf_header',
+                    'diag': item
+                })
+                self.visible_items.append({
+                    'type': 'perf_details',
+                    'diag': item
+                })
+                self.visible_items.append({
+                    'type': 'perf_recommend',
+                    'diag': item
+                })
+                self.visible_items.append({
+                    'type': 'perf_spacer',
+                    'diag': item
+                })
 
     # --- ACTIONS & OPERATIONS ---
 
@@ -1033,6 +1233,10 @@ class TUIApp:
                     # Query ghost registry entries
                     self.ghost_apps = get_ghost_applications()
                     
+                    # Run system-wide performance diagnosis if option checked
+                    if getattr(self, 'run_diagnostics_opt', False):
+                        self.diagnose_performance()
+                        
                     # Calculate initial reclaim stats once
                     self.calculate_reclaim_stats()
                     
@@ -1102,7 +1306,7 @@ class TUIApp:
                 if subkey == b'H': # Up arrow
                     self.active_index = max(0, self.active_index - 1)
                 elif subkey == b'P': # Down arrow
-                    items_len = len(self.drives) if self.state == "drive_selector" else len(self.visible_items)
+                    items_len = (len(self.drives) + 1) if self.state == "drive_selector" else len(self.visible_items)
                     self.active_index = min(items_len - 1, self.active_index + 1)
                 elif subkey == b'K': # Left arrow (collapse in tree, or prev tab)
                     if self.state == "dashboard":
@@ -1111,7 +1315,8 @@ class TUIApp:
                             if item['type'] == 'folder' and item['node'].is_expanded:
                                 item['node'].is_expanded = False
                         else:
-                            self.current_tab = (self.current_tab - 1) % 5
+                            num_tabs = 6 if getattr(self, 'run_diagnostics_opt', False) else 5
+                            self.current_tab = (self.current_tab - 1) % num_tabs
                             self.active_index = 0
                             self.scroll_top = 0
                             clear_screen()
@@ -1122,7 +1327,8 @@ class TUIApp:
                             if item['type'] == 'folder' and not item['node'].is_expanded:
                                 item['node'].is_expanded = True
                         else:
-                            self.current_tab = (self.current_tab + 1) % 5
+                            num_tabs = 6 if getattr(self, 'run_diagnostics_opt', False) else 5
+                            self.current_tab = (self.current_tab + 1) % num_tabs
                             self.active_index = 0
                             self.scroll_top = 0
                             clear_screen()
@@ -1157,32 +1363,39 @@ class TUIApp:
             
         elif key == b' ': # Space key
             if self.state == "drive_selector":
-                drive = self.drives[self.active_index]['drive']
-                if drive in self.selected_drives:
-                    # Keep at least one drive selected
-                    if len(self.selected_drives) > 1:
-                        self.selected_drives.remove(drive)
+                if self.active_index < len(self.drives):
+                    drive = self.drives[self.active_index]['drive']
+                    if drive in self.selected_drives:
+                        # Keep at least one drive selected
+                        if len(self.selected_drives) > 1:
+                            self.selected_drives.remove(drive)
+                    else:
+                        self.selected_drives.add(drive)
                 else:
-                    self.selected_drives.add(drive)
+                    self.run_diagnostics_opt = not self.run_diagnostics_opt
             elif self.state == "dashboard":
                 self.toggle_active_item_selection()
             return False
             
         elif key == b'\t': # Tab key
             if self.state == "dashboard":
-                self.current_tab = (self.current_tab + 1) % 5
+                num_tabs = 6 if getattr(self, 'run_diagnostics_opt', False) else 5
+                self.current_tab = (self.current_tab + 1) % num_tabs
                 self.active_index = 0
                 self.scroll_top = 0
                 clear_screen()
             return False
             
         # Hotkeys for direct tab navigation
-        elif key in (b'1', b'2', b'3', b'4', b'5'):
+        elif key in (b'1', b'2', b'3', b'4', b'5', b'6'):
             if self.state == "dashboard":
-                self.current_tab = int(key.decode()) - 1
-                self.active_index = 0
-                self.scroll_top = 0
-                clear_screen()
+                val = int(key.decode()) - 1
+                num_tabs = 6 if getattr(self, 'run_diagnostics_opt', False) else 5
+                if val < num_tabs:
+                    self.current_tab = val
+                    self.active_index = 0
+                    self.scroll_top = 0
+                    clear_screen()
             return False
             
         elif key in (b'd', b'D'): # Delete key command

@@ -448,3 +448,96 @@ def get_ghost_applications():
 
     # Sort alphabetically by name
     return sorted(ghost_apps, key=lambda x: x['name'].lower())
+
+def get_startup_applications():
+    """
+    Scans the registry startup Run paths to count background apps.
+    Returns a list of dicts: [{'name': name, 'command': cmd, 'root': 'HKLM'/'HKCU'}]
+    """
+    apps = []
+    if sys.platform != 'win32' or not winreg:
+        # Mock values for non-win32 platforms
+        return [
+            {'name': 'Discord', 'command': 'C:\\Users\\Mock\\AppData\\Local\\Discord\\Update.exe --processStart Discord.exe', 'root': 'HKCU'},
+            {'name': 'Spotify', 'command': 'C:\\Users\\Mock\\AppData\\Roaming\\Spotify\\Spotify.exe --minimized', 'root': 'HKCU'},
+            {'name': 'Steam', 'command': '"C:\\Program Files (x86)\\Steam\\steam.exe" -silent', 'root': 'HKCU'}
+        ]
+
+    targets = [
+        (winreg.HKEY_LOCAL_MACHINE, "HKLM", r"SOFTWARE\Microsoft\Windows\CurrentVersion\Run"),
+        (winreg.HKEY_CURRENT_USER, "HKCU", r"SOFTWARE\Microsoft\Windows\CurrentVersion\Run")
+    ]
+
+    for root_key, root_str, path in targets:
+        try:
+            key = winreg.OpenKey(root_key, path, 0, winreg.KEY_READ)
+            i = 0
+            while True:
+                name, val, _ = winreg.EnumValue(key, i)
+                apps.append({
+                    'name': name or "Unknown",
+                    'command': val or "",
+                    'root': root_str
+                })
+                i += 1
+        except OSError:
+            pass
+
+    return apps
+
+def get_memory_status():
+    """
+    Retrieves system physical and virtual memory utilization using native Win32 APIs via ctypes.
+    Returns a dictionary: {
+        'ram_load': int, # percentage e.g. 75
+        'total_phys': int, # bytes
+        'avail_phys': int, # bytes
+        'total_page': int, # bytes
+        'avail_page': int, # bytes
+    }
+    """
+    if sys.platform != 'win32':
+        # Mock values for non-win32 platforms
+        return {
+            'ram_load': 45,
+            'total_phys': 16 * 1024**3,
+            'avail_phys': 8.8 * 1024**3,
+            'total_page': 24 * 1024**3,
+            'avail_page': 14 * 1024**3,
+        }
+
+    class MEMORYSTATUSEX(ctypes.Structure):
+        _fields_ = [
+            ('dwLength', wintypes.DWORD),
+            ('dwMemoryLoad', wintypes.DWORD),
+            ('ullTotalPhys', ctypes.c_uint64),
+            ('ullAvailPhys', ctypes.c_uint64),
+            ('ullTotalPageFile', ctypes.c_uint64),
+            ('ullAvailPageFile', ctypes.c_uint64),
+            ('ullTotalVirtual', ctypes.c_uint64),
+            ('ullAvailVirtual', ctypes.c_uint64),
+            ('ullAvailExtendedVirtual', ctypes.c_uint64),
+        ]
+
+    stat = MEMORYSTATUSEX()
+    stat.dwLength = ctypes.sizeof(stat)
+    try:
+        if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)):
+            return {
+                'ram_load': stat.dwMemoryLoad,
+                'total_phys': stat.ullTotalPhys,
+                'avail_phys': stat.ullAvailPhys,
+                'total_page': stat.ullTotalPageFile,
+                'avail_page': stat.ullAvailPageFile,
+            }
+    except Exception:
+        pass
+
+    return {
+        'ram_load': 0,
+        'total_phys': 0,
+        'avail_phys': 0,
+        'total_page': 0,
+        'avail_page': 0,
+    }
+
