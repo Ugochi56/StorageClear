@@ -5,6 +5,7 @@ import msvcrt
 import ctypes
 from ctypes import wintypes
 import shutil
+import subprocess
 
 from storageclear.ops import get_logical_drives, send_to_recycle_bin, delete_permanently, get_ghost_applications, delete_registry_key_recursive, is_user_admin, get_startup_applications, get_memory_status
 from storageclear.scanner import scan_directory, DirNode
@@ -202,6 +203,8 @@ class TUIApp:
             self.render_deleting(cols, rows)
         elif self.state == "done":
             self.render_done(cols, rows)
+        elif self.state == "boost_confirmation":
+            self.render_boost_confirmation(cols, rows)
 
         sys.stdout.flush()
 
@@ -510,6 +513,43 @@ class TUIApp:
         
         sys.stdout.write("".join(lines).rstrip('\n'))
 
+    def render_boost_confirmation(self, cols, rows):
+        """Draws the performance boost execution summary screen."""
+        lines = []
+        lines.append(self.render_header("CONFIRM PERFORMANCE BOOSTS", cols))
+        lines.append("\n")
+        
+        selected_boosts = [diag for diag in getattr(self, 'perf_diagnostics', []) if diag.get('is_selected', False)]
+        
+        lines.append(f"  {COLOR_WARNING}{BOLD}You are about to apply the following system performance boosts:{RESET}\n\n")
+        
+        for boost in selected_boosts:
+            lines.append(f"    {COLOR_SUCCESS}✔ {boost['category']}{RESET}\n")
+            if boost['action_type'] == 'taskmgr_startup':
+                lines.append(f"      {COLOR_GRAY}Action: Open Windows Task Manager to manually disable startup apps.{RESET}\n")
+            elif boost['action_type'] == 'taskmgr':
+                lines.append(f"      {COLOR_GRAY}Action: Open Windows Task Manager to close heavy background processes.{RESET}\n")
+            elif boost['action_type'] == 'sysdm':
+                lines.append(f"      {COLOR_GRAY}Action: Open System Properties to manage Virtual Memory limits.{RESET}\n")
+            elif boost['action_type'] == 'tab_large_files':
+                lines.append(f"      {COLOR_GRAY}Action: Switch to Large Files & Duplicates queue to manually free up storage space.{RESET}\n")
+            elif boost['action_type'] == 'tab_junk_caches':
+                lines.append(f"      {COLOR_GRAY}Action: Safely queue all verified safe junk & system caches for deletion.{RESET}\n")
+            lines.append("\n")
+            
+        lines.append(f"  {BG_HIGHLIGHT}{COLOR_CYAN} SAFE AUTOMATION: {RESET} StorageClear will open the native Windows tools \n")
+        lines.append(f"  for system-level modifications (like Startup Apps and Memory) to prevent \n")
+        lines.append(f"  any accidental operating system breakage.\n")
+        
+        # Fill rest
+        for _ in range(rows - len(lines) - 2):
+            lines.append("\n")
+            
+        footer = BG_HEADER + COLOR_SUCCESS + BOLD + " [Y] Proceed with Boosts | [Esc] Cancel " + RESET
+        lines.append(footer + " " * max(0, cols - len(" [Y] Proceed with Boosts | [Esc] Cancel ")))
+        
+        sys.stdout.write("".join(lines).rstrip('\n'))
+
     def render_deleting(self, cols, rows):
         """Draws screen during deletion process."""
         lines = []
@@ -722,8 +762,10 @@ class TUIApp:
                 status_str = f"{COLOR_WARNING}⚠ NOTICE{RESET}"
                 
             if item['type'] == 'perf_header':
-                title = f"  📁 Category: {BOLD}{COLOR_PRIMARY}{diag['category']}{RESET}"
-                raw_len = 15 + len(diag['category'])
+                check = "[x]" if diag.get('is_selected', False) else "[ ]"
+                check_color = COLOR_DANGER if diag.get('is_selected', False) else COLOR_GRAY
+                title = f"  {check_color}{check}{RESET} 📁 Category: {BOLD}{COLOR_PRIMARY}{diag['category']}{RESET}"
+                raw_len = 15 + len(diag['category']) + 6
                 spaces = max(2, cols - raw_len - 15)
                 return f"{title}{' ' * spaces}{status_str}"
                 
@@ -871,7 +913,9 @@ class TUIApp:
             'category': 'Physical RAM Load',
             'status': ram_status,
             'details': ram_details,
-            'recommendation': ram_recommend
+            'recommendation': ram_recommend,
+            'is_selected': ram_status != "HEALTHY",
+            'action_type': 'taskmgr'
         })
         
         # 2. Windows Virtual Memory Swap Space
@@ -891,7 +935,9 @@ class TUIApp:
                 'category': 'Virtual Swap Space',
                 'status': page_status,
                 'details': page_details,
-                'recommendation': page_recommend
+                'recommendation': page_recommend,
+                'is_selected': page_status != "HEALTHY",
+                'action_type': 'sysdm'
             })
             
         # 3. High-Impact Startup Apps
@@ -919,7 +965,9 @@ class TUIApp:
             'category': 'Boot Startup Apps',
             'status': start_status,
             'details': start_details,
-            'recommendation': start_recommend
+            'recommendation': start_recommend,
+            'is_selected': start_status != "HEALTHY",
+            'action_type': 'taskmgr_startup'
         })
         
         # 4. Storage Space Capacity Limits
@@ -965,7 +1013,9 @@ class TUIApp:
             'category': 'Storage Capacities',
             'status': store_status,
             'details': store_details,
-            'recommendation': store_recommend
+            'recommendation': store_recommend,
+            'is_selected': store_status != "HEALTHY",
+            'action_type': 'tab_large_files'
         })
         
         # 5. Developer Caches & Temp Junk Footprint
@@ -988,7 +1038,9 @@ class TUIApp:
             'category': 'Junk & Cache Bloat',
             'status': junk_status,
             'details': junk_details,
-            'recommendation': junk_recommend
+            'recommendation': junk_recommend,
+            'is_selected': junk_status != "HEALTHY",
+            'action_type': 'tab_junk_caches'
         })
 
     def is_path_selected(self, path):
@@ -1250,10 +1302,11 @@ class TUIApp:
                                 
                     self.junk_categories = find_junk_and_cache(self.tree_roots)
                     
-                    # Auto select junk/caches by default
+                    # Auto select safe junk/caches by default
                     for cat in self.junk_categories.values():
-                        for p in cat['paths']:
-                            self.toggle_path_selection(p, True)
+                        if cat.get('is_safe', False):
+                            for p in cat['paths']:
+                                self.toggle_path_selection(p, True)
                             
                     # Query ghost registry entries
                     self.ghost_apps = get_ghost_applications()
@@ -1313,6 +1366,34 @@ class TUIApp:
         self.state = "done"
         clear_screen()
 
+    def execute_boosts(self):
+        """Executes safe native Windows commands based on selected boosts."""
+        selected_boosts = [diag for diag in getattr(self, 'perf_diagnostics', []) if diag.get('is_selected', False)]
+        
+        for boost in selected_boosts:
+            action = boost['action_type']
+            if action == 'taskmgr_startup':
+                # Opens Task Manager directly to the Startup tab
+                subprocess.Popen(['taskmgr', '/0', '/startup'], shell=True)
+            elif action == 'taskmgr':
+                subprocess.Popen(['taskmgr'], shell=True)
+            elif action == 'sysdm':
+                subprocess.Popen(['sysdm.cpl', ',3'], shell=True)
+            elif action == 'tab_large_files':
+                self.current_tab = 2 # Large Files
+            elif action == 'tab_junk_caches':
+                # Automatically queue all safe caches
+                for cat in self.junk_categories.values():
+                    if cat.get('is_safe', False):
+                        for p in cat['paths']:
+                            self.toggle_path_selection(p, True)
+                self.current_tab = 3 # Caches
+                
+        self.state = "dashboard"
+        self.active_index = 0
+        self.scroll_top = 0
+        clear_screen()
+
     # --- EVENT & KEYBOARD HANDLERS ---
 
     def handle_input(self):
@@ -1361,7 +1442,7 @@ class TUIApp:
 
         # Regular ASCII keys
         if key == b'\x1b': # Escape key
-            if self.state == "confirmation":
+            if self.state in ("confirmation", "boost_confirmation"):
                 self.state = "dashboard"
                 clear_screen()
             return False
@@ -1375,6 +1456,10 @@ class TUIApp:
                     item = self.visible_items[self.active_index]
                     if item['type'] == 'folder':
                         item['node'].is_expanded = not item['node'].is_expanded
+                elif self.current_tab == 5:
+                    if any(diag.get('is_selected', False) for diag in self.perf_diagnostics):
+                        self.state = "boost_confirmation"
+                        clear_screen()
             elif self.state == "done":
                 self.state = "dashboard"
                 self.selected_to_delete = []
@@ -1449,10 +1534,12 @@ class TUIApp:
         elif key in (b'q', b'Q'): # Quit
             return True
             
-        elif key in (b'y', b'Y', b'p', b'P'): # Confirm Deletion actions
+        elif key in (b'y', b'Y', b'p', b'P'): # Confirm actions
             if self.state == "confirmation":
                 permanent = (key in (b'p', b'P'))
                 self.execute_deletion(use_recycle_bin=not permanent)
+            elif self.state == "boost_confirmation" and key in (b'y', b'Y'):
+                self.execute_boosts()
             return False
             
         return False
@@ -1502,6 +1589,11 @@ class TUIApp:
         elif self.current_tab == 4: # 5. Ghost App Cleaner
             app = item['app']
             app['is_selected'] = not app.get('is_selected', False)
+            
+        elif self.current_tab == 5: # 6. PC Performance Boost
+            if item['type'] == 'perf_header':
+                diag = item['diag']
+                diag['is_selected'] = not diag.get('is_selected', False)
 
         # Recalculate and update the cached statistics since selection state changed!
         self.calculate_reclaim_stats()

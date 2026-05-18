@@ -156,27 +156,32 @@ def find_junk_and_cache(tree_roots):
         'py_cache': {
             'name': 'Python Cache & Compiled Bytecode (__pycache__, .pytest_cache)',
             'size': 0,
-            'paths': [] # list of paths to delete (can be folder or file)
+            'paths': [], # list of paths to delete (can be folder or file)
+            'is_safe': True
         },
         'node_modules': {
             'name': 'Node.js Dependency Modules (node_modules)',
             'size': 0,
-            'paths': []
+            'paths': [],
+            'is_safe': False
         },
         'venv': {
             'name': 'Python Virtual Environments (.venv, venv, env)',
             'size': 0,
-            'paths': []
+            'paths': [],
+            'is_safe': False
         },
         'build_cache': {
             'name': 'IDE, Compiler & Package Caches (.gradle, .npm, target/, .sass-cache)',
             'size': 0,
-            'paths': []
+            'paths': [],
+            'is_safe': True
         },
         'logs_temp': {
             'name': 'System & Application Logs/Temp Files (*.log, *.tmp)',
             'size': 0,
-            'paths': []
+            'paths': [],
+            'is_safe': True
         }
     }
 
